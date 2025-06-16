@@ -21,6 +21,7 @@ import android.os.Build;
 import android.provider.MediaStore;
 import android.util.DisplayMetrics;
 import android.util.Log;
+import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.Toast;
@@ -33,8 +34,6 @@ import java.util.HashSet;
 import java.util.Set;
 
 public class AdMonitorService extends AccessibilityService {
-
-    private final Set<AccessibilityNodeInfo> banners = new HashSet<>();
     private static final String TAG = "AdMonitorService";
     private MediaProjection mediaProjection;
     private VirtualDisplay virtualDisplay;
@@ -168,39 +167,6 @@ public class AdMonitorService extends AccessibilityService {
         }
     }
 
-//    private void processImage(Image image) {
-//        if (image == null) return;
-//
-//        try {
-//            Image.Plane[] planes = image.getPlanes();
-//            ByteBuffer buffer = planes[0].getBuffer();
-//
-//            Bitmap bitmap = Bitmap.createBitmap(
-//                    image.getWidth(),
-//                    image.getHeight(),
-//                    Bitmap.Config.ARGB_8888
-//            );
-//            bitmap.copyPixelsFromBuffer(buffer);
-//
-//            Rect area = new Rect(42, 300, 1038, 805);
-//            if (area.left >= 0 && area.top >= 0 &&
-//                    area.right <= bitmap.getWidth() &&
-//                    area.bottom <= bitmap.getHeight()) {
-//
-//                Bitmap cropped = Bitmap.createBitmap(
-//                        bitmap,
-//                        area.left,
-//                        area.top,
-//                        area.width(),
-//                        area.height()
-//                );
-//
-//                saveToGallery(cropped);
-//            }
-//        } catch (Exception e) {
-//            Log.e(TAG, "Ошибка обработки изображения", e);
-//        }
-//    }
 
     private void processImage(Image image) {
         if (image == null) return;
@@ -259,6 +225,7 @@ public class AdMonitorService extends AccessibilityService {
     }
 
     public void takeScreenshotOfAdBanner(Rect area) {
+
         if (latestBitmap == null) {
             Log.e(TAG, "Нет доступного кадра для обрезки");
             return;
@@ -277,23 +244,22 @@ public class AdMonitorService extends AccessibilityService {
         return !area.isEmpty() &&
                 area.left >= 0 &&
                 area.top >= 0 &&
-                area.right <= bitmap.getWidth() &&
-                area.bottom <= bitmap.getHeight();
+                area.right < bitmap.getWidth() &&
+                area.bottom < bitmap.getHeight();
+    }
+
+    private boolean isSystemApp(AccessibilityNodeInfo node) {
+        String packageName = node.getPackageName().toString();
+        return packageName.startsWith("com.android") || packageName.startsWith("com.google.android");
     }
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            AccessibilityNodeInfo root = getRootInActiveWindow();
-            if (root != null && !root.getPackageName().toString().startsWith("com.android")) {
-                Log.i("Current App", "Текущее приложение: " + root.getPackageName().toString());
-                checkForAdBanner(root);
-                root.recycle();
-            }
-        }
-        if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
-            AccessibilityNodeInfo root = getRootInActiveWindow();
-            if (root != null && !root.getPackageName().toString().startsWith("com.android")) {
+        int eventType = event.getEventType();
+
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            AccessibilityNodeInfo root = event.getSource();
+            if (root != null && !isSystemApp(root)) {
                 checkForAdBanner(root);
                 root.recycle();
             }
@@ -304,19 +270,55 @@ public class AdMonitorService extends AccessibilityService {
         if (node == null) return;
 
         try {
-            Rect rect = new Rect();
-            node.getBoundsInScreen(rect);
-            // Проверяем текущий узел
-//            && !banners.contains(node)
-            //rect.left >= 0 && rect.top <= 300 && rect.right <= 1080 && rect.bottom <= 800
-            //
-            if (isAdBannerNode(node)  &&  (rect.right - rect.left) > 700 && (rect.bottom - rect.top) > 300) {
-                Log.i(TAG, "Обнаружен рекламный баннер: " + rect.toShortString());
-                takeScreenshotOfAdBanner(new Rect(42, 300, 1038, 805));
-                //startScreenCapture();
-                banners.add(node);
-
+            //package name: com.wildberries  РАЗМЕР баннера: +-1000х500
+            if (node.getPackageName().toString().contains("wildberries")) {
+                Rect rect = new Rect();
+                node.getBoundsInScreen(rect);
+                if (isAdBannerNode(node) && (rect.right - rect.left) > 700 && (rect.bottom - rect.top) > 300) {
+                    Log.i(TAG, "Обнаружен рекламный баннер: " + rect.toShortString());
+                    takeScreenshotOfAdBanner(rect);
+                }
             }
+
+            //package name: ru.zen.android  РАЗМЕР баннера: +-1100х1100
+            //text reklami na child 6
+            //ЯНДЕКС DZEN: получаем элемент реклама, берем его родителя, потом берем 3 ребенка и его текст
+            if (node.getPackageName().toString().contains("ru.zen")) {
+                if (node.getText() != null &&
+                        (node.getText().toString().contains("Ad") || node.getText().toString().contains("Реклама"))) {
+                    Log.i("Рекламодатель!", "Рекламодатель: " + node.getParent().getChild(2).getText().toString());
+                    Log.i("Текст рекламы", "Text: " + node.getParent().getChild(6).getText().toString());
+                    Rect rect1 = new Rect();
+                    node.getParent().getBoundsInScreen(rect1);
+                    Log.i("Баннер", "Обнаружен рекламный баннер: " + rect1.toShortString());
+                    Log.i("Баннер", "Сделан скриншот баннера на ГЛАВНЫЙ ЭКРАН");
+                    Log.i("Координаты баннера", rect1.toShortString());
+                    takeScreenshotOfAdBanner(rect1);
+                }
+            }
+
+            //package name: ru.auto.ara  РАЗМЕР баннера: 500х600
+            //text = 5
+            //AUTO RU: особенное имя класса, важно чтобы узел имел 7 детей, имя рекламодателя под 4 индексом
+            if (node.getPackageName().toString().contains("ru.auto")) {
+                if (node.getClassName().toString().endsWith("u4.s") && node.getChildCount() >= 7
+                        && node.getChild(4).getText() != null && node.getChild(5).getText() != null) {
+                    Log.i("Рекламодатель", "Рекламодатель: " + node.getChild(4).getText().toString());
+                    Log.i("Текст рекламы", "Текст рекл.: " + node.getChild(5).getText().toString());
+                    if (node.getChild(6).getText() != null && node.getChild(6).getText().toString().startsWith("Подробнее")) {
+                        Rect rect = new Rect();
+                        node.getBoundsInScreen(rect);
+                        if ((rect.right - rect.left) > 450 && (rect.right - rect.left) < (getResources().getDisplayMetrics().widthPixels / 2)
+                                && (rect.bottom - rect.top) > 500 && (rect.bottom - rect.top) < (getResources().getDisplayMetrics().heightPixels / 3)) {
+                            Log.i("Баннер", "Обнаружен рекламный баннер: " + rect.toShortString());
+                            Log.i("Баннер", "Сделан скриншот баннера на ГЛАВНЫЙ ЭКРАН");
+                            Log.i("Координаты баннера", rect.toShortString());
+                            takeScreenshotOfAdBanner(rect);
+                        }
+                    }
+                }
+            }
+
 
             // Рекурсивно проверяем дочерние узлы
             for (int i = 0; i < node.getChildCount(); i++) {
@@ -326,7 +328,8 @@ public class AdMonitorService extends AccessibilityService {
                     child.recycle();
                 }
             }
-        } catch (Exception e) {
+        } catch (
+                Exception e) {
             Log.e(TAG, "Ошибка проверки баннера", e);
         }
     }
